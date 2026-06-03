@@ -1,6 +1,6 @@
 'use client'
 import { useStockPolling } from '@/hooks/useStockPolling'
-import { formatPrice, formatRate, formatDiff, timeAgo } from '@/lib/format'
+import { formatPrice, formatRate, formatDiff, formatTrillion } from '@/lib/format'
 import type { ExchangeQuote } from '@/lib/naver'
 
 const UP = '#E74C3C'
@@ -13,16 +13,9 @@ function diffColor(amount: number) {
   return NEUTRAL
 }
 
-function ExchangeBlock({
-  label,
-  quote,
-}: {
-  label: string
-  quote: ExchangeQuote | null
-}) {
+function ExchangeBlock({ label, quote }: { label: string; quote: ExchangeQuote | null }) {
   return (
     <div className="flex-1 min-w-0">
-      {/* 거래소 레이블 */}
       <div className="mb-3">
         <span
           className="text-xs font-semibold px-2 py-0.5 rounded"
@@ -34,32 +27,19 @@ function ExchangeBlock({
 
       {quote ? (
         <>
-          {/* 현재가 */}
-          <div
-            className="text-3xl font-bold tabular-nums mb-1"
-            style={{ color: 'var(--text-1)' }}
-          >
+          <div className="text-3xl font-bold tabular-nums mb-1" style={{ color: 'var(--text-1)' }}>
             ₩{formatPrice(quote.price)}
           </div>
-
-          {/* 등락폭 + 등락률 */}
-          <div
-            className="text-sm tabular-nums font-medium"
-            style={{ color: diffColor(quote.diffAmount) }}
-          >
+          <div className="text-sm tabular-nums font-medium" style={{ color: diffColor(quote.diffAmount) }}>
             {formatDiff(quote.diffAmount)}&nbsp;
             <span className="text-xs">({formatRate(quote.diffRate)})</span>
           </div>
-
-          {/* 전일 종가 */}
           <div className="mt-3 text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
             전일 종가&nbsp;₩{formatPrice(quote.prevClosePrice)}
           </div>
         </>
       ) : (
-        <div className="text-sm" style={{ color: 'var(--text-2)' }}>
-          데이터 없음
-        </div>
+        <div className="text-sm" style={{ color: 'var(--text-2)' }}>데이터 없음</div>
       )}
     </div>
   )
@@ -70,34 +50,24 @@ export default function StockCard({ ticker, name }: { ticker: string; name: stri
 
   return (
     <div className="h-full flex flex-col">
-      {/* 카드 헤더 */}
       <div className="flex items-baseline gap-2 mb-6">
-        <h2 className="text-lg font-semibold" style={{ color: 'var(--text-1)' }}>
-          {name}
-        </h2>
-        <span className="text-sm tabular-nums" style={{ color: 'var(--text-2)' }}>
-          {ticker}
-        </span>
-        {data && (
-          <span className="ml-auto text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
-            {timeAgo(data.updatedAt)}
-          </span>
-        )}
+        <h2 className="text-lg font-semibold" style={{ color: 'var(--text-1)' }}>{name}</h2>
+        <span className="text-sm tabular-nums" style={{ color: 'var(--text-2)' }}>{ticker}</span>
       </div>
 
-      {loading && (
+      {!data && loading && (
         <div className="flex-1 flex items-center justify-center" style={{ color: 'var(--text-2)' }}>
           <span className="text-sm">불러오는 중…</span>
         </div>
       )}
 
-      {error && !loading && (
+      {!data && error && (
         <div className="flex-1 flex items-center justify-center" style={{ color: NEUTRAL }}>
           <span className="text-sm">데이터를 불러올 수 없습니다</span>
         </div>
       )}
 
-      {data && !loading && (
+      {data && (
         <>
           {/* KRX / NXT 나란히 */}
           <div className="flex gap-6">
@@ -109,21 +79,52 @@ export default function StockCard({ ticker, name }: { ticker: string; name: stri
             <ExchangeBlock label="NXT" quote={data.nxt} />
           </div>
 
-          {/* KRX-NXT 스프레드 */}
-          {data.krx && data.nxt && (
-            <div
-              className="mt-5 pt-4 text-xs tabular-nums"
-              style={{ borderTop: '1px solid var(--border)', color: 'var(--text-2)' }}
-            >
-              KRX–NXT 스프레드&ensp;
-              <span
-                className="font-medium"
-                style={{ color: diffColor(data.krx.price - data.nxt.price) }}
-              >
-                {formatDiff(data.krx.price - data.nxt.price)}원
-              </span>
-            </div>
-          )}
+          {/* KRX-NXT 스프레드 + 거래량·거래대금 */}
+          <div
+            className="mt-5 pt-4 space-y-3"
+            style={{ borderTop: '1px solid var(--border)' }}
+          >
+            {data.krx && data.nxt && (
+              <div className="text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
+                KRX–NXT 스프레드&ensp;
+                <span
+                  className="font-medium"
+                  style={{ color: diffColor(data.krx.price - data.nxt.price) }}
+                >
+                  {formatDiff(data.krx.price - data.nxt.price)}원
+                </span>
+              </div>
+            )}
+
+            {(() => {
+              const krxVol = data.krx?.volume ?? 0
+              const nxtVol = data.nxt?.volume ?? 0
+              const totalVolume = krxVol + nxtVol
+
+              const krxAmt = data.krx?.tradingValue ?? 0
+              const nxtAmt = data.nxt?.tradingValue ?? 0
+              const totalAmount = krxAmt + nxtAmt
+
+              return (
+                <div className="grid grid-cols-2 gap-x-6 gap-y-1">
+                  <div className="text-xs" style={{ color: 'var(--text-2)' }}>
+                    거래량 (KRX+NXT)
+                  </div>
+                  <div className="text-xs" style={{ color: 'var(--text-2)' }}>
+                    거래대금 (KRX+NXT)
+                  </div>
+                  <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-1)' }}>
+                    {totalVolume > 0 ? `${formatPrice(totalVolume)}주` : '—'}
+                  </div>
+                  <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-1)' }}>
+                    {totalAmount > 0
+                      ? `${formatTrillion(totalAmount * 1_000_000)}원`
+                      : '—'}
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
         </>
       )}
     </div>

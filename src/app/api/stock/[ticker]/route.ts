@@ -1,15 +1,17 @@
 import { NextResponse } from 'next/server'
-import { fetchDualQuote } from '@/lib/naver'
+
+const BACKEND = process.env.BACKEND_URL ?? 'http://localhost:8000'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function GET(_req: Request, { params }: { params: { ticker: string } }) {
   try {
-    const data = await fetchDualQuote(params.ticker)
-    if (!data) return NextResponse.json({ error: 'Parse failed' }, { status: 502 })
+    const res = await fetch(`${BACKEND}/stock/${params.ticker}`, { cache: 'no-store' })
+    if (!res.ok) throw new Error(`Backend ${res.status}`)
+    const data = await res.json()
     return NextResponse.json(data)
-  } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 502 })
+  } catch {
+    return NextResponse.json({ error: 'Backend unavailable' }, { status: 502 })
   }
 }

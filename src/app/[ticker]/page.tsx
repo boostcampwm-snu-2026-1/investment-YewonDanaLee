@@ -1,5 +1,6 @@
 import { STOCKS } from '@/lib/constants'
 import StockCard from '@/components/price/StockCard'
+import EtfIndexPanel from '@/components/etf/EtfIndexPanel'
 
 export default function PricePage({ params }: { params: { ticker: string } }) {
   const stock = STOCKS.find(s => s.ticker === params.ticker)
@@ -17,27 +18,7 @@ export default function PricePage({ params }: { params: { ticker: string } }) {
 
         {/* Card 2: 관련 ETF/지수 */}
         <section className="card p-8">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-lg font-semibold" style={{ color: 'var(--text-1)' }}>관련 ETF / 지수</h2>
-            <span
-              className="text-xs px-2 py-0.5 rounded-full"
-              style={{ backgroundColor: 'var(--bg-muted)', color: 'var(--text-2)' }}
-            >
-              {params.ticker === '005930' ? 'KOSPI · KODEX' : 'SOX · SOXX'}
-            </span>
-          </div>
-          <div
-            className="rounded-xl flex flex-col items-center justify-center gap-3"
-            style={{ backgroundColor: 'var(--bg-muted)', minHeight: '200px' }}
-          >
-            {[1, 2, 3].map(i => (
-              <div
-                key={i}
-                className="w-full max-w-xs h-8 rounded-lg"
-                style={{ backgroundColor: 'var(--border)' }}
-              />
-            ))}
-          </div>
+          <EtfIndexPanel />
         </section>
 
       </div>

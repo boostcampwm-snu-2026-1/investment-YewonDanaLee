@@ -15,6 +15,8 @@ export interface ExchangeQuote {
   diffAmount: number
   diffRate: number
   prevClosePrice: number
+  volume?: number       // 거래량 (주) — KRX에 합산값 저장, NXT는 생략
+  tradingValue?: number // 거래대금 (백만원) — KRX에 합산값 저장, NXT는 생략
 }
 
 export interface DualQuote {
@@ -74,7 +76,36 @@ function parseSection(sectionHtml: string): ExchangeQuote | null {
   const diffAmount = signedValue(toNaverNumber(exdayMatches[0]?.[2] ?? ''), diffClass)
   const diffRate = signedValue(toNaverNumber(exdayMatches[1]?.[2] ?? ''), rateClass)
 
-  return { price, diffAmount, diffRate, prevClosePrice: price - diffAmount }
+  // 거래소별 거래량·거래대금은 각 섹션 HTML에서 추출
+  const volume = extractTdValue(sectionHtml, 'sp_txt9') || undefined
+  const tradingValue = extractTdValue(sectionHtml, 'sp_txt10') || undefined
+
+  return { price, diffAmount, diffRate, prevClosePrice: price - diffAmount, volume, tradingValue }
+}
+
+/**
+ * spanClass (e.g. "sp_txt9", "sp_txt10") 를 포함한 td를 찾아
+ * <span class="blind"> 우선 파싱, 없으면 CSS 인코딩 파싱
+ */
+function extractTdValue(html: string, spanClass: string): number {
+  const re = new RegExp(`class="[^"]*\\b${spanClass}\\b[^"]*"`)
+  const match = re.exec(html)
+  if (!match) return 0
+
+  const before = html.slice(0, match.index)
+  const tdStart = before.lastIndexOf('<td')
+  if (tdStart === -1) return 0
+
+  const tdEnd = html.indexOf('</td>', match.index)
+  if (tdEnd === -1) return 0
+
+  const tdHtml = html.slice(tdStart, tdEnd + 5)
+
+  // <span class="blind">숫자</span> 우선
+  const blindMatch = tdHtml.match(/<span[^>]+class="blind"[^>]*>([\s\S]*?)<\/span>/)
+  if (blindMatch) return toNumber(blindMatch[1])
+
+  return toNaverNumber(tdHtml)
 }
 
 export function parseNaverDualQuote(html: string, ticker: string): DualQuote | null {

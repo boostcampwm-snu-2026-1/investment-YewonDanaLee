@@ -1,4 +1,5 @@
 import { STOCKS } from '@/lib/constants'
+import StockCard from '@/components/price/StockCard'
 
 export default function PricePage({ params }: { params: { ticker: string } }) {
   const stock = STOCKS.find(s => s.ticker === params.ticker)
@@ -11,36 +12,7 @@ export default function PricePage({ params }: { params: { ticker: string } }) {
 
         {/* Card 1: 가격 */}
         <section className="card p-8">
-          <div className="flex items-center gap-3 mb-6">
-            <h2 className="text-lg font-semibold" style={{ color: 'var(--text-1)' }}>
-              {stock?.name}
-            </h2>
-            <span className="text-sm tabular-nums" style={{ color: 'var(--text-2)' }}>
-              {params.ticker}
-            </span>
-            <span
-              className="ml-auto text-xs px-2 py-0.5 rounded-full"
-              style={{ backgroundColor: 'var(--bg-muted)', color: 'var(--text-2)' }}
-            >
-              가격
-            </span>
-          </div>
-          <div
-            className="rounded-xl p-8 flex flex-col items-center justify-center gap-3"
-            style={{ backgroundColor: 'var(--bg-muted)', minHeight: '200px' }}
-          >
-            <div className="text-4xl font-bold tabular-nums" style={{ color: 'var(--text-1)' }}>
-              ₩—
-            </div>
-            <div className="text-sm" style={{ color: 'var(--text-2)' }}>
-              해외 실시간 추정가 · 한국 종가 토글
-            </div>
-            <div className="flex gap-6 mt-2 text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
-              <span>거래량 — 주</span>
-              <span>거래대금 — 억</span>
-              <span>시총 — 조</span>
-            </div>
-          </div>
+          <StockCard ticker={params.ticker} name={stock?.name ?? params.ticker} />
         </section>
 
         {/* Card 2: 관련 ETF/지수 */}

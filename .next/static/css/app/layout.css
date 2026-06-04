@@ -596,9 +596,6 @@ video {
 .mb-6 {
   margin-bottom: 1.5rem;
 }
-.ml-auto {
-  margin-left: auto;
-}
 .mt-0\.5 {
   margin-top: 0.125rem;
 }
@@ -744,6 +741,10 @@ video {
 .border-b-2 {
   border-bottom-width: 2px;
 }
+.object-cover {
+  -o-object-fit: cover;
+     object-fit: cover;
+}
 .p-8 {
   padding: 2rem;
 }
@@ -791,11 +792,11 @@ video {
   padding-top: 1.5rem;
   padding-bottom: 1.5rem;
 }
-.pt-4 {
-  padding-top: 1rem;
-}
 .pr-1 {
   padding-right: 0.25rem;
+}
+.pt-4 {
+  padding-top: 1rem;
 }
 .text-center {
   text-align: center;
@@ -838,9 +839,6 @@ video {
 }
 .tracking-tight {
   letter-spacing: -0.025em;
-}
-.filter {
-  filter: var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow);
 }
 .transition-colors {
   transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;

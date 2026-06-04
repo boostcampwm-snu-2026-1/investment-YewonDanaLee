@@ -1,8 +1,10 @@
 {
-  "/api/sox/route": "app/api/sox/route.js",
+  "/_not-found/page": "app/_not-found/page.js",
   "/api/ewy/route": "app/api/ewy/route.js",
-  "/api/koru/route": "app/api/koru/route.js",
-  "/api/drametf/route": "app/api/drametf/route.js",
+  "/api/sox/route": "app/api/sox/route.js",
   "/api/stock/[ticker]/route": "app/api/stock/[ticker]/route.js",
+  "/api/drametf/route": "app/api/drametf/route.js",
+  "/api/usdkrw/route": "app/api/usdkrw/route.js",
+  "/api/koru/route": "app/api/koru/route.js",
   "/[ticker]/page": "app/[ticker]/page.js"
 }

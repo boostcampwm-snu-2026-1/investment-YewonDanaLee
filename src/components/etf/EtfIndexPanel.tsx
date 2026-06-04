@@ -32,8 +32,13 @@ function useIndexPolling(path: string) {
   useEffect(() => {
     const load = () =>
       fetch(path, { cache: 'no-store' })
-        .then(r => { if (!r.ok) throw new Error(); return r.json() as Promise<IndexData> })
-        .then(d => { _cache[path] = d; setData(d); setError(false) })
+        .then(r => { if (!r.ok) throw new Error(); return r.json() })
+        .then(d => {
+          if (d?.index == null) { setError(true); return }
+          _cache[path] = d as IndexData
+          setData(d as IndexData)
+          setError(false)
+        })
         .catch(() => setError(true))
 
     load()

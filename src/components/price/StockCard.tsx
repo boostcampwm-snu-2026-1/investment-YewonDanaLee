@@ -50,9 +50,19 @@ export default function StockCard({ ticker, name }: { ticker: string; name: stri
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-baseline gap-2 mb-6">
-        <h2 className="text-lg font-semibold" style={{ color: 'var(--text-1)' }}>{name}</h2>
-        <span className="text-sm tabular-nums" style={{ color: 'var(--text-2)' }}>{ticker}</span>
+      <div className="flex items-center gap-3 mb-6">
+        <img
+          src={`/${ticker}.${ticker === '005930' ? 'jpg' : 'png'}`}
+          alt={name}
+          width={36}
+          height={36}
+          className="rounded-full object-cover shrink-0"
+          style={{ border: '1px solid var(--border)' }}
+        />
+        <div className="flex items-baseline gap-2">
+          <h2 className="text-lg font-semibold" style={{ color: 'var(--text-1)' }}>{name}</h2>
+          <span className="text-sm tabular-nums" style={{ color: 'var(--text-2)' }}>{ticker}</span>
+        </div>
       </div>
 
       {!data && loading && (

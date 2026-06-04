@@ -218,26 +218,70 @@ def _scrape_investing(driver, url: str) -> dict | None:
         print(f"[ETF] scrape error {url}: {e}")
         return None
 
+def _fetch_one_etf(etf: dict):
+    """ETF 1개를 독립 Chrome 세션으로 스크래핑"""
+    driver = _create_driver()
+    try:
+        data = _scrape_investing(driver, etf["url"])
+        if data:
+            with _etf_lock:
+                _etf_cache[etf["key"]] = {**data, "name": etf["name"]}
+            print(f"[ETF] {etf['key']:4s}  {data['index']:>10.2f}  {data['diffRate']:+.2f}%")
+    except Exception as e:
+        print(f"[ETF] {etf['key']} error: {e}")
+    finally:
+        driver.quit()
+
 def _etf_poller():
-    """단일 Chrome 세션으로 ETF 3개를 순회하며 60초마다 캐시 갱신"""
+    """ETF 3개를 ThreadPoolExecutor로 병렬 스크래핑 — 순차 대비 ~3배 빠름"""
+    from concurrent.futures import ThreadPoolExecutor
     while True:
-        driver = _create_driver()
-        try:
-            for etf in ETF_PAGES:
-                data = _scrape_investing(driver, etf["url"])
-                if data:
-                    with _etf_lock:
-                        _etf_cache[etf["key"]] = {**data, "name": etf["name"]}
-                    print(f"[ETF] {etf['key']:4s}  {data['index']:>10.2f}  {data['diffRate']:+.2f}%")
-        except Exception as e:
-            print(f"[ETF] poller error: {e}")
-        finally:
-            driver.quit()
+        with ThreadPoolExecutor(max_workers=len(ETF_PAGES)) as pool:
+            pool.map(_fetch_one_etf, ETF_PAGES)
         time.sleep(60)
 
 threading.Thread(target=_etf_poller, daemon=True).start()
 
+# ─── USD/KRW (yfinance) ─────────────────────────────────────────────────
+
+_usdkrw_cache: dict | None = None
+_usdkrw_lock = threading.Lock()
+
+def _usdkrw_poller():
+    global _usdkrw_cache
+    while True:
+        try:
+            import yfinance as yf
+            info = yf.Ticker("USDKRW=X").fast_info
+            price = round(float(info.last_price), 2)
+            prev  = round(float(info.previous_close), 2)
+            diff  = round(price - prev, 2)
+            rate  = round((diff / prev) * 100, 2) if prev else 0.0
+            data = {
+                "usdKrw":     price,
+                "diffAmount": diff,
+                "diffRate":   rate,
+                "direction":  "up" if diff > 0 else ("down" if diff < 0 else "neutral"),
+                "updatedAt":  time.strftime("%Y-%m-%dT%H:%M:%S+09:00"),
+            }
+            with _usdkrw_lock:
+                _usdkrw_cache = data
+            print(f"[USD/KRW] {price:,.2f}  {diff:+.2f}  ({rate:+.2f}%)")
+        except Exception as e:
+            print(f"[USD/KRW] error: {e}")
+        time.sleep(10)
+
+threading.Thread(target=_usdkrw_poller, daemon=True).start()
+
 # ─── API 엔드포인트 ──────────────────────────────────────────────────────
+
+@app.get("/usdkrw")
+def api_usdkrw():
+    with _usdkrw_lock:
+        data = _usdkrw_cache
+    if not data:
+        return JSONResponse({"error": "loading"}, status_code=503)
+    return data
 
 @app.get("/stock/{ticker}")
 def api_stock(ticker: str):

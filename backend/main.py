@@ -344,7 +344,7 @@ threading.Thread(target=_dram_poller, daemon=True).start()
 # ─── 주가 히스토리 (price_DB_crawling.py, 1일 주기) ─────────────────────
 
 def _price_history_poller():
-    import price_DB_crawling as _mod
+    import backend.stock_DB_collector as _mod
     while True:
         try:
             _mod.main()
@@ -357,7 +357,7 @@ threading.Thread(target=_price_history_poller, daemon=True).start()
 # ─── ETF 히스토리 (ETF_DB_crawling.py, 1일 주기) ────────────────────────
 
 def _etf_history_poller():
-    import ETF_DB_crawling as _mod
+    import backend.ETF_DB_collector as _mod
     while True:
         try:
             _mod.main()

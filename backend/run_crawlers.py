@@ -2,8 +2,8 @@
 전체 DB 크롤링 일괄 실행 스크립트
 실행 순서:
   1. stock_DB_collector  — 삼성/SK 전일 주가 히스토리 → data/삼성_history.xlsx, data/SK_history.xlsx
-  2. ETF_DB_collector    — SOX/DRAM_ETF/EWY/KORU 전일 데이터 → data/ETF.xlsx
-  3. memory_DB_crawling  — 당일 DRAM 현물가 → data/memory_price.xlsx
+  2. ETF_DB_crawling    — SOX/DRAM_ETF/EWY/KORU 전일 데이터 → data/ETF.xlsx
+  3. memory_DB_crawling — 당일 DRAM 현물가 → data/memory_price.xlsx
 
 실행: python backend/run_crawlers.py
       (또는 crontab에 등록하여 자동화)
@@ -17,9 +17,9 @@ import importlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 CRAWLERS = [
-    ("stock_DB",  "stock_DB_collector",  "main"),
-    ("ETF_DB",    "ETF_DB_collector",    "main"),
-    ("memory_DB", "memory_DB_crawling",  "crawl_and_save"),
+    ("price_DB",  "stock_DB_collector",  "main"),
+    ("ETF_DB",    "ETF_DB_crawling",    "main"),
+    ("memory_DB", "memory_DB_crawling", "crawl_and_save"),
 ]
 
 
@@ -33,6 +33,7 @@ def run_all():
         start = time.time()
         try:
             mod = importlib.import_module(module_name)
+            # 모듈을 재실행해야 할 경우(cron 등 장기 프로세스) 리로드
             importlib.reload(mod)
             getattr(mod, func_name)()
             elapsed = round(time.time() - start, 1)

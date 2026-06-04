@@ -1,5 +1,6 @@
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -73,28 +74,32 @@ def fetch_latest_row(driver, url):
         return None, None
 
 
-def main():
+def _crawl_one(key, url):
     driver = create_driver()
+    try:
+        print(f"  - {key} 데이터 가져오는 중...")
+        return key, *fetch_latest_row(driver, url)
+    finally:
+        driver.quit()
+
+def main():
+    print("[시작] 인베스팅닷컴 과거 데이터 수집을 시작합니다...")
+
+    with ThreadPoolExecutor(max_workers=len(URLS)) as pool:
+        futures = [pool.submit(_crawl_one, key, url) for key, url in URLS.items()]
+        results = [f.result() for f in futures]
+
     scraped_data = {}
     common_date = None
-    
-    print("[시작] 인베스팅닷컴 과거 데이터 수집을 시작합니다...")
-    
-    for key, url in URLS.items():
-        print(f"  - {key} 데이터 가져오는 중...")
-        date_str, price = fetch_latest_row(driver, url)
-        
+
+    for key, date_str, price in results:
         if date_str and price:
             scraped_data[key] = price
-            # 모든 자산의 최신 기준 날짜가 동일한지 체크 (일반적으로 미국 장 마감 기준 동일)
             if not common_date:
                 common_date = date_str
         else:
             print(f"[경고] {key} 데이터를 수집하지 못해 작업을 중단합니다.")
-            driver.quit()
             return
-
-    driver.quit()
     
     if not common_date or len(scraped_data) < 4:
         print("[종료] 완전한 데이터를 수집하지 못했습니다.")

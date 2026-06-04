@@ -6,3 +6,6 @@ lightgbm
 scikit-learn
 pandas
 openpyxl
+undetected-chromedriver
+setuptools
+pykrx

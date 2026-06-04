@@ -1,12 +1,26 @@
 """
 YENLAB 백엔드
 - /stock/{ticker}  : 네이버 금융 → KRX / NXT 시세 (requests + BeautifulSoup)
-- /sox             : Yahoo Finance → SOX 지수 (yfinance, 60s 캐시)
+- /sox             : investing.com → SOX 지수 (Selenium, 60s 캐시)
 - /etf             : investing.com → DRAM / EWY / KORU ETF (Selenium, 60s 캐시)
+- /dram/spot       : DRAMExchange → 주가 예측용 4대 핵심 지표 (60분 캐시 & 엑셀 누적)
+백그라운드 DB 누적 (1일 1회, 날짜 중복 시 자동 스킵):
+  - price_DB_crawling  → data/삼성_history.xlsx, data/SK_history.xlsx  (전일 데이터)
+  - ETF_DB_crawling    → data/ETF.xlsx                                  (전일 데이터)
+  - _dram_poller       → data/memory_price.xlsx                         (당일 데이터)
 실행: venv/bin/python3 backend/main.py
 """
-import time
+import os
+import re
+import sys
 import threading
+import time
+from datetime import datetime
+
+# 같은 디렉토리의 크롤링 스크립트를 임포트 가능하게 설정
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, HTTPException
@@ -123,48 +137,19 @@ def get_stock_data(ticker: str) -> dict | None:
         print(f"[stock] {ticker} error: {e}")
         return None
 
-# ─── SOX (yfinance) ─────────────────────────────────────────────────────
-
-_sox_cache: dict | None = None
-_sox_ts: float = 0.0
-
-def _fetch_sox() -> dict | None:
-    try:
-        import yfinance as yf
-        info = yf.Ticker("^SOX").fast_info
-        price = round(float(info.last_price), 2)
-        prev  = round(float(info.previous_close), 2)
-        diff  = round(price - prev, 2)
-        rate  = round((diff / prev) * 100, 2) if prev else 0.0
-        return {
-            "index": price, "diffAmount": diff, "diffRate": rate,
-            "direction": "up" if diff > 0 else ("down" if diff < 0 else "neutral"),
-            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S+09:00"),
-        }
-    except Exception as e:
-        print(f"[SOX] error: {e}")
-        return None
-
-def _sox_poller():
-    global _sox_cache, _sox_ts
-    while True:
-        d = _fetch_sox()
-        if d:
-            _sox_cache, _sox_ts = d, time.time()
-            print(f"[SOX] {d['index']:,.2f}  {d['diffRate']:+.2f}%")
-        time.sleep(60)
-
-threading.Thread(target=_sox_poller, daemon=True).start()
-
-# ─── ETF (investing.com, Selenium) ──────────────────────────────────────
+# ─── ETF + SOX + USD/KRW (investing.com, Selenium) ─────────────────────
 
 ETF_PAGES = [
+    {"key": "SOX",  "name": "SOX",
+     "url": "https://kr.investing.com/indices/phlx-semiconductor"},
     {"key": "DRAM", "name": "DRAM",
      "url": "https://kr.investing.com/etfs/dram"},
     {"key": "EWY",  "name": "EWY",
      "url": "https://kr.investing.com/etfs/ishares-south-korea-index"},
     {"key": "KORU", "name": "KORU",
      "url": "https://kr.investing.com/etfs/direxion-daily-sk-bull-3x-shrs"},
+    {"key": "USDKRW", "name": "USD/KRW",
+     "url": "https://kr.investing.com/currencies/usd-krw"},
 ]
 
 _etf_cache: dict = {}   # key → item dict
@@ -193,8 +178,8 @@ def _create_driver():
 
 def _scrape_investing(driver, url: str) -> dict | None:
     from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
+    from selenium.webdriver.support.ui import WebDriverWait
     try:
         driver.get(url)
         price_el = WebDriverWait(driver, 15).until(
@@ -219,7 +204,6 @@ def _scrape_investing(driver, url: str) -> dict | None:
         return None
 
 def _fetch_one_etf(etf: dict):
-    """ETF 1개를 독립 Chrome 세션으로 스크래핑"""
     driver = _create_driver()
     try:
         data = _scrape_investing(driver, etf["url"])
@@ -233,7 +217,6 @@ def _fetch_one_etf(etf: dict):
         driver.quit()
 
 def _etf_poller():
-    """ETF 3개를 ThreadPoolExecutor로 병렬 스크래핑 — 순차 대비 ~3배 빠름"""
     from concurrent.futures import ThreadPoolExecutor
     while True:
         with ThreadPoolExecutor(max_workers=len(ETF_PAGES)) as pool:
@@ -242,46 +225,164 @@ def _etf_poller():
 
 threading.Thread(target=_etf_poller, daemon=True).start()
 
-# ─── USD/KRW (yfinance) ─────────────────────────────────────────────────
 
-_usdkrw_cache: dict | None = None
-_usdkrw_lock = threading.Lock()
 
-def _usdkrw_poller():
-    global _usdkrw_cache
+# ─── DRAMExchange Spot/Contract (신규 통합) ──────────────────────────────────
+
+_dram_cache: dict | None = None
+_dram_lock = threading.Lock()
+DRAM_FILE_NAME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "memory_price.xlsx")
+
+def _clean_dram_percentage(text: str) -> float:
+    match = re.search(r"(-?\d+\.?\d*)", text)
+    return float(match.group(1)) if match else 0.0
+
+def _fetch_dram_exchange() -> dict | None:
+    url = "https://dramexchange.com/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    try:
+        res = requests.get(url, headers=headers, timeout=15)
+        if res.status_code != 200:
+            return None
+        soup = BeautifulSoup(res.text, "html.parser")
+        
+        extracted = {}
+        rows = soup.find_all("tr")
+        
+        for row in rows:
+            text = row.get_text(separator=" ", strip=True)
+            
+            # 1. DDR5 16Gb 단품 (현물 선행)
+            if "DDR5 16Gb (2Gx8) 4800/5600" in text:
+                tds = row.find_all("td")
+                if len(tds) >= 7:
+                    extracted["DDR5_16Gb_Avg"] = float(tds[5].text.strip())
+                    extracted["DDR5_16Gb_Chg"] = _clean_dram_percentage(tds[6].text)
+            
+            # 2. DDR5 RDIMM 32GB (서버용 모듈 수요)
+            elif "DDR5 RDIMM 32GB 4800/5600" in text:
+                tds = row.find_all("td")
+                if len(tds) >= 7:
+                    extracted["DDR5_RDIMM_32GB_Avg"] = float(tds[5].text.strip())
+                    extracted["DDR5_RDIMM_32GB_Chg"] = _clean_dram_percentage(tds[6].text)
+            
+            # 3. 512Gb TLC Wafer (NAND 업황)
+            elif "512Gb TLC" in text:
+                tds = row.find_all("td")
+                if len(tds) >= 7:
+                    extracted["NAND_512Gb_TLC_Avg"] = float(tds[5].text.strip())
+                    extracted["NAND_512Gb_TLC_Chg"] = _clean_dram_percentage(tds[6].text)
+            
+            # 4. DDR4 16GB SO-DIMM (고정 계약가 대표)
+            elif "DDR4 16GB SO-DIMM" in text:
+                tds = row.find_all("td")
+                if len(tds) >= 6:
+                    extracted["DDR4_16GB_SO_DIMM_Avg"] = float(tds[3].text.strip())
+                    extracted["DDR4_16GB_SO_DIMM_Chg"] = _clean_dram_percentage(tds[4].text)
+
+        required_keys = ["DDR5_16Gb_Avg", "DDR5_RDIMM_32GB_Avg", "NAND_512Gb_TLC_Avg", "DDR4_16GB_SO_DIMM_Avg"]
+        if not all(k in extracted for k in required_keys):
+            print("[DRAM] Error: Some key metrics missing from HTML.")
+            return None
+            
+        extracted["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S+09:00")
+        return extracted
+    except Exception as e:
+        print(f"[DRAM] fetch error: {e}")
+        return None
+
+def _save_dram_to_excel(data: dict):
+    """매일 최초 1회 실행 혹은 데이터 갱신 시 엑셀 파일 누적 저장"""
+    try:
+        today_str = datetime.today().strftime("%Y-%m-%d")
+        new_row = {"Date": today_str}
+        for k, v in data.items():
+            if k != "updatedAt":
+                new_row[k] = v
+                
+        df_new = pd.DataFrame([new_row])
+        columns_order = [
+            "Date", "DDR5_16Gb_Avg", "DDR5_16Gb_Chg", 
+            "DDR5_RDIMM_32GB_Avg", "DDR5_RDIMM_32GB_Chg", 
+            "NAND_512Gb_TLC_Avg", "NAND_512Gb_TLC_Chg", 
+            "DDR4_16GB_SO_DIMM_Avg", "DDR4_16GB_SO_DIMM_Chg"
+        ]
+        
+        os.makedirs(os.path.dirname(DRAM_FILE_NAME), exist_ok=True)
+        
+        if os.path.exists(DRAM_FILE_NAME):
+            df_old = pd.read_excel(DRAM_FILE_NAME)
+            # 오늘 날짜 중복 행 필터링 제거 후 병합
+            if today_str in df_old["Date"].astype(str).values:
+                df_old = df_old[df_old["Date"].astype(str) != today_str]
+            df_final = pd.concat([df_old, df_new], ignore_index=True)
+        else:
+            df_final = df_new
+            
+        df_final = df_final[columns_order]
+        df_final.to_excel(DRAM_FILE_NAME, index=False)
+        print(f"[DRAM] Excel accumulated successfully for {today_str}.")
+    except Exception as e:
+        print(f"[DRAM] Excel save error: {e}")
+
+def _dram_poller():
+    global _dram_cache
+    while True:
+        d = _fetch_dram_exchange()
+        if d:
+            with _dram_lock:
+                _dram_cache = d
+            print(f"[DRAM] Spot/Contract market data updated inside cache.")
+            _save_dram_to_excel(d)
+        time.sleep(86400)
+
+threading.Thread(target=_dram_poller, daemon=True).start()
+
+
+# ─── 주가 히스토리 (price_DB_crawling.py, 1일 주기) ─────────────────────
+
+def _price_history_poller():
+    import price_DB_crawling as _mod
     while True:
         try:
-            import yfinance as yf
-            info = yf.Ticker("USDKRW=X").fast_info
-            price = round(float(info.last_price), 2)
-            prev  = round(float(info.previous_close), 2)
-            diff  = round(price - prev, 2)
-            rate  = round((diff / prev) * 100, 2) if prev else 0.0
-            data = {
-                "usdKrw":     price,
-                "diffAmount": diff,
-                "diffRate":   rate,
-                "direction":  "up" if diff > 0 else ("down" if diff < 0 else "neutral"),
-                "updatedAt":  time.strftime("%Y-%m-%dT%H:%M:%S+09:00"),
-            }
-            with _usdkrw_lock:
-                _usdkrw_cache = data
-            print(f"[USD/KRW] {price:,.2f}  {diff:+.2f}  ({rate:+.2f}%)")
+            _mod.main()
         except Exception as e:
-            print(f"[USD/KRW] error: {e}")
-        time.sleep(10)
+            print(f"[PriceHistory] error: {e}")
+        time.sleep(86400)
 
-threading.Thread(target=_usdkrw_poller, daemon=True).start()
+threading.Thread(target=_price_history_poller, daemon=True).start()
+
+# ─── ETF 히스토리 (ETF_DB_crawling.py, 1일 주기) ────────────────────────
+
+def _etf_history_poller():
+    import ETF_DB_crawling as _mod
+    while True:
+        try:
+            _mod.main()
+        except Exception as e:
+            print(f"[ETFHistory] error: {e}")
+        time.sleep(86400)
+
+threading.Thread(target=_etf_history_poller, daemon=True).start()
+
 
 # ─── API 엔드포인트 ──────────────────────────────────────────────────────
 
 @app.get("/usdkrw")
 def api_usdkrw():
-    with _usdkrw_lock:
-        data = _usdkrw_cache
-    if not data:
+    with _etf_lock:
+        raw = _etf_cache.get("USDKRW")
+    if not raw:
         return JSONResponse({"error": "loading"}, status_code=503)
-    return data
+    return {
+        "usdKrw":     raw["index"],
+        "diffAmount": raw["diffAmount"],
+        "diffRate":   raw["diffRate"],
+        "direction":  raw["direction"],
+        "updatedAt":  raw["updatedAt"],
+    }
 
 @app.get("/stock/{ticker}")
 def api_stock(ticker: str):
@@ -292,17 +393,7 @@ def api_stock(ticker: str):
 
 @app.get("/sox")
 def api_sox():
-    global _sox_cache, _sox_ts
-    now = time.time()
-    if _sox_cache and (now - _sox_ts) < 60:
-        return _sox_cache
-    d = _fetch_sox()
-    if d:
-        _sox_cache, _sox_ts = d, now
-        return d
-    if _sox_cache:
-        return _sox_cache
-    return JSONResponse({"error": "SOX unavailable"}, status_code=502)
+    return _etf_item("SOX")
 
 def _etf_item(key: str):
     with _etf_lock:
@@ -332,6 +423,19 @@ def api_ewy():
 @app.get("/koru")
 def api_koru():
     return _etf_item("KORU")
+
+
+# ─── 신규 라우터 추가 (프론트엔드 연동용) ───────────────────────────────────
+
+@app.get("/dram/spot")
+def api_dram_spot():
+    """주가 예측을 위한 메모리 현물/고정 핵심 스펙 반환"""
+    with _dram_lock:
+        data = _dram_cache
+    if not data:
+        return JSONResponse({"error": "DRAM data loading"}, status_code=503)
+    return data
+
 
 if __name__ == "__main__":
     import uvicorn

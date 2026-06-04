@@ -16,7 +16,7 @@ URLS = {
     "KORU": "https://kr.investing.com/etfs/direxion-daily-sk-bull-3x-shrs-historical-data"
 }
 
-EXCEL_NAME = "ETF.xlsx"
+EXCEL_NAME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "ETF.xlsx")
 
 def create_driver() -> webdriver.Chrome:
     """우회용 크롬 드라이버 설정"""

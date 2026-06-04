@@ -80,7 +80,9 @@ def fetch_closed_market_row(driver, url):
 
 def save_to_excel(prefix, data):
     # 요청하신 대로 파일명 설정 (_history.xlsx)
-    filename = f"{prefix}_history.xlsx"
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
+    os.makedirs(data_dir, exist_ok=True)
+    filename = os.path.join(data_dir, f"{prefix}_history.xlsx")
     
     if not os.path.exists(filename):
         wb = openpyxl.Workbook()

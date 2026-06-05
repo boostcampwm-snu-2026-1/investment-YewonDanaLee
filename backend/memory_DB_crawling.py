@@ -1,63 +1,109 @@
-"""
-전체 DB 크롤링 일괄 실행 스크립트
-실행 순서:
-  1. stock_DB_collector  — 삼성/SK 전일 주가 히스토리 → data/삼성_history.xlsx, data/SK_history.xlsx
-  2. ETF_DB_collector    — SOX/DRAM_ETF/EWY/KORU 전일 데이터 → data/ETF.xlsx
-  3. memory_DB_crawling  — 당일 DRAM 현물가 → data/memory_price.xlsx
-
-실행: python backend/run_crawlers.py
-      (또는 crontab에 등록하여 자동화)
-"""
-import sys
 import os
-import time
-import importlib
+import re
+from datetime import datetime
+import pandas as pd
+from bs4 import BeautifulSoup
+import requests
 
-# backend/ 폴더를 모듈 탐색 경로에 추가
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-CRAWLERS = [
-    ("stock_DB",  "stock_DB_collector",  "main"),
-    ("ETF_DB",    "ETF_DB_collector",    "main"),
-    ("memory_DB", "memory_DB_crawling",  "crawl_and_save"),
-]
+URL = "https://dramexchange.com/"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+FILE_NAME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "memory_price.xlsx")
 
 
-def run_all():
-    total_start = time.time()
-    results = {}
+def clean_percentage(text: str) -> float:
+    match = re.search(r"(-?\d+\.?\d*)", text)
+    return float(match.group(1)) if match else 0.0
 
-    for label, module_name, func_name in CRAWLERS:
-        print(f"\n{'─' * 50}")
-        print(f"[{label}] 시작")
-        start = time.time()
-        try:
-            mod = importlib.import_module(module_name)
-            importlib.reload(mod)
-            getattr(mod, func_name)()
-            elapsed = round(time.time() - start, 1)
-            results[label] = f"완료 ({elapsed}s)"
-            print(f"[{label}] 완료 ({elapsed}s)")
-        except ModuleNotFoundError:
-            elapsed = round(time.time() - start, 1)
-            results[label] = f"실패: {module_name}.py 파일을 찾을 수 없음"
-            print(f"[{label}] 실패: '{module_name}.py' 가 backend/ 폴더에 없습니다.")
-        except AttributeError:
-            elapsed = round(time.time() - start, 1)
-            results[label] = f"실패: {module_name}.{func_name}() 함수 없음"
-            print(f"[{label}] 실패: '{module_name}' 에 '{func_name}()' 함수가 없습니다.")
-        except Exception as e:
-            elapsed = round(time.time() - start, 1)
-            results[label] = f"실패: {e}"
-            print(f"[{label}] 실패 ({elapsed}s): {e}")
 
-    total = round(time.time() - total_start, 1)
-    print(f"\n{'=' * 50}")
-    print(f"전체 소요: {total}s")
-    for label, status in results.items():
-        print(f"  {label:12s} → {status}")
-    print(f"{'=' * 50}")
+def to_float(text: str) -> float | None:
+    """숫자로 변환 가능한 텍스트만 float 반환, 아니면 None"""
+    try:
+        return float(text.replace(",", "").strip())
+    except ValueError:
+        return None
+
+
+def find_price_td(tds: list, start: int = 3) -> tuple[float, float] | None:
+    """
+    tds 리스트에서 start 인덱스부터 순서대로 탐색해
+    숫자인 td(Avg)와 그 다음 td(Chg)를 찾아 반환.
+    테이블 구조가 바뀌어도 대응 가능.
+    """
+    for i in range(start, len(tds) - 1):
+        avg = to_float(tds[i].text)
+        if avg is not None and avg > 0:
+            chg = clean_percentage(tds[i + 1].text)
+            return avg, chg
+    return None
+
+
+def crawl_and_save():
+    today_str = datetime.today().strftime("%Y-%m-%d")
+
+    try:
+        response = requests.get(URL, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"조회 실패: {e}")
+        return
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    new_data = {"Date": today_str}
+
+    targets = {
+        "DDR5 16Gb (2Gx8) 4800/5600":  ("DDR5_16Gb_Avg",       "DDR5_16Gb_Chg"),
+        "DDR5 RDIMM 32GB 4800/5600":    ("DDR5_RDIMM_32GB_Avg", "DDR5_RDIMM_32GB_Chg"),
+        "512Gb TLC":                    ("NAND_512Gb_TLC_Avg",  "NAND_512Gb_TLC_Chg"),
+        "DDR4 UDIMM 16GB 3200":        ("DDR4_UDIMM_16GB_Avg", "DDR4_UDIMM_16GB_Chg"),
+    }
+
+    for row in soup.find_all("tr"):
+        text = row.get_text(separator=" ", strip=True)
+        for keyword, (avg_key, chg_key) in targets.items():
+            if keyword in text and avg_key not in new_data:
+                tds = row.find_all("td")
+                result = find_price_td(tds, start=3)
+                if result:
+                    new_data[avg_key] = result[0]
+                    new_data[chg_key] = result[1]
+                else:
+                    print(f"  [경고] '{keyword}' 행에서 숫자 컬럼을 찾지 못했습니다.")
+                    print(f"         td 내용: {[td.text.strip() for td in tds]}")
+                break
+
+    required_keys = [
+        "DDR5_16Gb_Avg", "DDR5_RDIMM_32GB_Avg",
+        "NAND_512Gb_TLC_Avg", "DDR4_UDIMM_16GB_Avg",
+    ]
+    if not all(k in new_data for k in required_keys):
+        missing = [k for k in required_keys if k not in new_data]
+        print(f"경고: 다음 항목을 찾지 못했습니다: {missing}")
+        return
+
+    df_new = pd.DataFrame([new_data])
+
+    if os.path.exists(FILE_NAME):
+        df_old = pd.read_excel(FILE_NAME)
+        if today_str in df_old["Date"].astype(str).values:
+            print(f"{today_str} 데이터가 이미 존재합니다. 업데이트합니다.")
+            df_old = df_old[df_old["Date"].astype(str) != today_str]
+        df_final = pd.concat([df_old, df_new], ignore_index=True)
+    else:
+        df_final = df_new
+
+    columns_order = [
+        "Date",
+        "DDR5_16Gb_Avg",       "DDR5_16Gb_Chg",
+        "DDR5_RDIMM_32GB_Avg", "DDR5_RDIMM_32GB_Chg",
+        "NAND_512Gb_TLC_Avg",  "NAND_512Gb_TLC_Chg",
+        "DDR4_UDIMM_16GB_Avg", "DDR4_UDIMM_16GB_Chg",
+    ]
+    df_final = df_final[columns_order]
+    df_final.to_excel(FILE_NAME, index=False)
+    print(f"성공: {today_str} 데이터가 {FILE_NAME}에 기록되었습니다.")
 
 
 if __name__ == "__main__":
-    run_all()
+    crawl_and_save()

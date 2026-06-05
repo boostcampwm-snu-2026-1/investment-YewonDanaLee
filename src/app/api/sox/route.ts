@@ -8,10 +8,10 @@ export const dynamic = 'force-dynamic'
 export async function GET() {
   try {
     const res = await fetch(`${BACKEND}/sox`, { cache: 'no-store' })
-    if (!res.ok) throw new Error(`Backend ${res.status}`)
-    const data = await res.json()
-    return NextResponse.json(data)
+    if (res.status === 503) return NextResponse.json({ error: 'loading' })
+    if (!res.ok) throw new Error()
+    return NextResponse.json(await res.json())
   } catch {
-    return NextResponse.json({ error: 'Backend unavailable' }, { status: 502 })
+    return NextResponse.json({ error: 'unavailable' })
   }
 }

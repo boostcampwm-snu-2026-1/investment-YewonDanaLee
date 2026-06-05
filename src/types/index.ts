@@ -41,6 +41,15 @@ export interface ExchangeRate {
   updatedAt: string
 }
 
+export interface Prediction {
+  ticker: string
+  direction: 'up' | 'down'
+  probability: number
+  bestModel: string
+  modelAccuracy: number
+  predictedAt: string
+}
+
 export interface Forecast {
   ticker: string
   model: 'prophet' | 'lstm'

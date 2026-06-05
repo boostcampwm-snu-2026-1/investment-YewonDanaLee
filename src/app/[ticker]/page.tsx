@@ -1,9 +1,24 @@
 import { STOCKS } from '@/lib/constants'
 import StockCard from '@/components/price/StockCard'
 import EtfIndexPanel from '@/components/etf/EtfIndexPanel'
+import PredictionCard from '@/components/forecast/PredictionCard'
 
-export default function PricePage({ params }: { params: { ticker: string } }) {
-  const stock = STOCKS.find(s => s.ticker === params.ticker)
+const BACKEND = process.env.BACKEND_URL ?? 'http://localhost:8000'
+
+async function fetchHistory(ticker: string) {
+  try {
+    const res = await fetch(`${BACKEND}/history/${ticker}`, { cache: 'no-store' })
+    if (!res.ok) return []
+    const data = await res.json()
+    return data.history ?? []
+  } catch {
+    return []
+  }
+}
+
+export default async function PricePage({ params }: { params: { ticker: string } }) {
+  const stock   = STOCKS.find(s => s.ticker === params.ticker)
+  const history = await fetchHistory(params.ticker)
 
   return (
     <div className="space-y-6">
@@ -25,32 +40,8 @@ export default function PricePage({ params }: { params: { ticker: string } }) {
 
       {/* 하단: 예측 (전체 너비) */}
       <section className="card p-8">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-lg font-semibold" style={{ color: 'var(--text-1)' }}>예측</h2>
-          <span
-            className="text-xs px-2 py-0.5 rounded-full"
-            style={{ backgroundColor: 'var(--bg-muted)', color: 'var(--text-2)' }}
-          >
-            Prophet · LSTM
-          </span>
-        </div>
-        <div
-          className="rounded-xl flex flex-col items-center justify-center gap-4"
-          style={{ backgroundColor: 'var(--bg-muted)', minHeight: '240px' }}
-        >
-          <div className="w-full px-6">
-            <div className="w-full h-32 rounded-lg" style={{ backgroundColor: 'var(--border)' }} />
-          </div>
-          <div className="flex gap-3">
-            {['상승여력', 'MAPE', '예측일', '갱신일'].map(label => (
-              <div
-                key={label}
-                className="h-8 w-20 rounded"
-                style={{ backgroundColor: 'var(--border)' }}
-              />
-            ))}
-          </div>
-        </div>
+        <h2 className="text-lg font-semibold mb-6" style={{ color: 'var(--text-1)' }}>내일 예측</h2>
+        <PredictionCard ticker={params.ticker} initialHistory={history} />
       </section>
 
     </div>

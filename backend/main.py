@@ -137,90 +137,56 @@ def get_stock_data(ticker: str) -> dict | None:
         print(f"[stock] {ticker} error: {e}")
         return None
 
-# ─── ETF + SOX + USD/KRW (investing.com, Selenium) ─────────────────────
+# ─── ETF + SOX + USD/KRW (yfinance, 60s 캐시) ────────────────────────────
 
-ETF_PAGES = [
-    {"key": "SOX",  "name": "SOX",
-     "url": "https://kr.investing.com/indices/phlx-semiconductor"},
-    {"key": "DRAM", "name": "DRAM",
-     "url": "https://kr.investing.com/etfs/dram"},
-    {"key": "EWY",  "name": "EWY",
-     "url": "https://kr.investing.com/etfs/ishares-south-korea-index"},
-    {"key": "KORU", "name": "KORU",
-     "url": "https://kr.investing.com/etfs/direxion-daily-sk-bull-3x-shrs"},
-    {"key": "USDKRW", "name": "USD/KRW",
-     "url": "https://kr.investing.com/currencies/usd-krw"},
-]
-
-_etf_cache: dict = {}   # key → item dict
+_etf_cache: dict = {}
 _etf_lock = threading.Lock()
 
-def _create_driver():
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    opts = Options()
-    opts.add_argument("--headless=new")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--window-size=1920,1080")
-    opts.add_argument(
-        "user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    )
-    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-    opts.add_experimental_option("useAutomationExtension", False)
-    driver = webdriver.Chrome(options=opts)
-    driver.execute_cdp_cmd(
-        "Page.addScriptToEvaluateOnNewDocument",
-        {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"},
-    )
-    return driver
+_YF_MAP = {
+    "SOX":    "^SOX",
+    "DRAM":   "DRAM",
+    "EWY":    "EWY",
+    "KORU":   "KORU",
+    "USDKRW": "KRW=X",
+}
 
-def _scrape_investing(driver, url: str) -> dict | None:
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.support.ui import WebDriverWait
-    try:
-        driver.get(url)
-        price_el = WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located(
-                (By.XPATH, '//*[@data-test="instrument-price-last"]')
-            )
-        )
-        price = _to_float(price_el.text)
-        change_els = driver.find_elements(By.XPATH, '//*[@data-test="instrument-price-change"]')
-        pct_els    = driver.find_elements(By.XPATH, '//*[@data-test="instrument-price-change-percent"]')
-        change = _to_float(change_els[0].text) if change_els else 0.0
-        pct    = _to_float(pct_els[0].text.strip().strip("()%+")) if pct_els else 0.0
-        if change < 0:
-            pct = -abs(pct)
-        return {
-            "index": price, "diffAmount": change, "diffRate": round(pct, 2),
-            "direction": "up" if change > 0 else ("down" if change < 0 else "neutral"),
-            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S+09:00"),
-        }
-    except Exception as e:
-        print(f"[ETF] scrape error {url}: {e}")
-        return None
-
-def _fetch_one_etf(etf: dict):
-    driver = _create_driver()
-    try:
-        data = _scrape_investing(driver, etf["url"])
-        if data:
-            with _etf_lock:
-                _etf_cache[etf["key"]] = {**data, "name": etf["name"]}
-            print(f"[ETF] {etf['key']:4s}  {data['index']:>10.2f}  {data['diffRate']:+.2f}%")
-    except Exception as e:
-        print(f"[ETF] {etf['key']} error: {e}")
-    finally:
-        driver.quit()
+def _fetch_yf_all() -> dict:
+    import yfinance as yf
+    symbols = list(_YF_MAP.values())
+    raw = yf.download(symbols, period="5d", interval="1d",
+                      auto_adjust=True, progress=False, group_by="ticker")
+    result = {}
+    for key, symbol in _YF_MAP.items():
+        try:
+            series = raw[symbol]["Close"].dropna()
+            if len(series) < 2:
+                continue
+            last = float(series.iloc[-1])
+            prev = float(series.iloc[-2])
+            diff = round(last - prev, 2)
+            rate = round(diff / prev * 100, 2)
+            result[key] = {
+                "index":      round(last, 2),
+                "diffAmount": diff,
+                "diffRate":   rate,
+                "direction":  "up" if diff > 0 else ("down" if diff < 0 else "neutral"),
+                "name":       key,
+                "updatedAt":  time.strftime("%Y-%m-%dT%H:%M:%S+09:00"),
+            }
+            print(f"[ETF] {key:6s}  {last:>12.2f}  {rate:+.2f}%")
+        except Exception as e:
+            print(f"[ETF] {key} error: {e}")
+    return result
 
 def _etf_poller():
-    from concurrent.futures import ThreadPoolExecutor
     while True:
-        with ThreadPoolExecutor(max_workers=len(ETF_PAGES)) as pool:
-            pool.map(_fetch_one_etf, ETF_PAGES)
+        try:
+            data = _fetch_yf_all()
+            if data:
+                with _etf_lock:
+                    _etf_cache.update(data)
+        except Exception as e:
+            print(f"[ETF] poller error: {e}")
         time.sleep(60)
 
 threading.Thread(target=_etf_poller, daemon=True).start()
@@ -341,10 +307,33 @@ def _dram_poller():
 threading.Thread(target=_dram_poller, daemon=True).start()
 
 
+# ─── 방향성 예측 (predict.py, 1일 주기) ─────────────────────────────────
+
+_predict_cache: dict = {}
+_predict_lock = threading.Lock()
+_TICKER_PREFIX = {"005930": "삼성", "000660": "SK"}
+
+def _predict_poller():
+    import predict as _pred
+    while True:
+        for ticker, prefix in _TICKER_PREFIX.items():
+            try:
+                result = _pred.predict_ticker(prefix)
+                result["ticker"] = ticker
+                result["predictedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S+09:00")
+                with _predict_lock:
+                    _predict_cache[ticker] = result
+                print(f"[Predict] {prefix} → {result['direction']} ({result['probability']:.1%})")
+            except Exception as e:
+                print(f"[Predict] {prefix} error: {e}")
+        time.sleep(60)
+
+threading.Thread(target=_predict_poller, daemon=True).start()
+
 # ─── 주가 히스토리 (price_DB_crawling.py, 1일 주기) ─────────────────────
 
 def _price_history_poller():
-    import backend.stock_DB_collector as _mod
+    import stock_DB_collector as _mod
     while True:
         try:
             _mod.main()
@@ -357,7 +346,7 @@ threading.Thread(target=_price_history_poller, daemon=True).start()
 # ─── ETF 히스토리 (ETF_DB_crawling.py, 1일 주기) ────────────────────────
 
 def _etf_history_poller():
-    import backend.ETF_DB_collector as _mod
+    import ETF_DB_collector as _mod
     while True:
         try:
             _mod.main()
@@ -426,6 +415,39 @@ def api_koru():
 
 
 # ─── 신규 라우터 추가 (프론트엔드 연동용) ───────────────────────────────────
+
+@app.get("/predict/{ticker}")
+def api_predict(ticker: str):
+    with _predict_lock:
+        data = _predict_cache.get(ticker)
+    if not data:
+        return JSONResponse({"error": "loading"}, status_code=503)
+    return data
+
+_HISTORY_FILES = {
+    "005930": os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "삼성_history.xlsx"),
+    "000660": os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "SK_history.xlsx"),
+}
+_HISTORY_PREFIX = {"005930": "삼성", "000660": "SK"}
+
+@app.get("/history/{ticker}")
+def api_history(ticker: str):
+    if ticker not in _HISTORY_FILES:
+        raise HTTPException(status_code=404, detail="Unknown ticker")
+    try:
+        from predict import load_stock
+        df = load_stock(_HISTORY_FILES[ticker], _HISTORY_PREFIX[ticker])
+        recent = df.tail(90)
+        col = f"{_HISTORY_PREFIX[ticker]}_close"
+        return {
+            "ticker": ticker,
+            "history": [
+                {"date": row["date"].strftime("%Y-%m-%d"), "close": int(row[col])}
+                for _, row in recent.iterrows()
+            ],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/dram/spot")
 def api_dram_spot():

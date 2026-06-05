@@ -10,12 +10,8 @@ STOCKS = {
 }
 
 def get_latest_trading_day() -> str:
-    """오늘이 장 마감 후면 오늘, 아니면 어제 (주말/공휴일 포함 역추적)"""
+    """오늘 날짜 반환 (주말이면 가장 최근 금요일로 역추적)"""
     now = datetime.now()
-    # 한국 장 마감 = 15:30. 그 전이면 전날 데이터가 최신
-    if now.hour < 15 or (now.hour == 15 and now.minute < 30):
-        now -= timedelta(days=1)
-    # 주말 스킵
     while now.weekday() >= 5:
         now -= timedelta(days=1)
     return now.strftime("%Y%m%d")
@@ -88,13 +84,12 @@ def save_to_excel(prefix: str, data: dict):
     # 날짜 열 너비 보정 (기존 파일 대응)
     ws.column_dimensions["A"].width = 18
 
-    # 중복 저장 방지
+    # 같은 날짜 행이 있으면 삭제 후 덮어쓰기
     if ws.max_row >= 2:
-        existing_date = ws.cell(row=2, column=1).value
-        if existing_date == data["date"]:
-            print(f"  👉 [스킵] {data['date']} 데이터가 이미 존재합니다.\n")
-            wb.close()
-            return
+        to_delete = [r for r in range(2, ws.max_row + 1)
+                     if ws.cell(row=r, column=1).value == data["date"]]
+        for r in reversed(to_delete):
+            ws.delete_rows(r)
 
     ws.insert_rows(2)
     ws.cell(row=2, column=1, value=data["date"])

@@ -1,151 +1,122 @@
 import os
-import time
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from datetime import datetime, timedelta
+import yfinance as yf
 import openpyxl
 
-# 인베스팅닷컴 타겟 URL 딕셔너리
-URLS = {
-    "SOX": "https://kr.investing.com/indices/phlx-semiconductor-historical-data",
-    "DRAM_ETF": "https://kr.investing.com/etfs/dram-historical-data",
-    "EWY": "https://kr.investing.com/etfs/ishares-south-korea-index-historical-data",
-    "KORU": "https://kr.investing.com/etfs/direxion-daily-sk-bull-3x-shrs-historical-data"
+# 이름 → Yahoo Finance 티커
+TICKERS = {
+    "SOX":      "^SOX",   # PHLX 반도체 지수
+    "DRAM_ETF": "DRAM",   # DRAM ETF
+    "EWY":      "EWY",    # iShares MSCI South Korea ETF
+    "KORU":     "KORU",   # Direxion Daily South Korea Bull 3X
 }
 
 EXCEL_NAME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "ETF.xlsx")
-
-def create_driver() -> webdriver.Chrome:
-    """우회용 크롬 드라이버 설정"""
-    opts = Options()
-    opts.add_argument("--headless=new")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--window-size=1920,1080")
-    opts.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    )
-    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-    opts.add_experimental_option("useAutomationExtension", False)
-    
-    driver = webdriver.Chrome(options=opts)
-    driver.execute_cdp_cmd(
-        "Page.addScriptToEvaluateOnNewDocument",
-        {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"},
-    )
-    return driver
+KEYS = ["SOX", "DRAM_ETF", "EWY", "KORU"]
 
 
-def fetch_latest_row(driver, url):
-    """지정한 과거 데이터 페이지에서 가장 최신 날짜(첫 번째 행)와 종가를 파싱"""
-    driver.get(url)
-    try:
-        # 과거 데이터 테이블 로딩 대기
-        table = WebDriverWait(driver, 12).until(
-            EC.presence_of_element_located((By.XPATH, '//table[contains(@class, "freeze-column")] | //table'))
-        )
-        
-        # 첫 번째 데이터 행(tbody -> 첫 번째 tr) 조준
-        first_tr = table.find_element(By.XPATH, './/tbody/tr[1]')
-        
-        # 날짜 추출 (<time> 태그 타겟팅)
-        time_el = first_tr.find_element(By.TAG_NAME, 'time')
-        date_str = time_el.text.strip() # 예: "2026년 06월 03일"
-        
-        # 종가(Close Price) 추출: 날짜 바로 다음 열(td)이 보통 종가입니다.
-        td_elements = first_tr.find_elements(By.TAG_NAME, 'td')
-        
-        # 첫 번째 td가 날짜를 포함하거나 비어있을 수 있으므로 안전하게 종가 텍스트 확보
-        # 인베스팅닷컴 신형 테이블 기준 2번째(인덱스 1)가 종가입니다.
-        close_price_raw = td_elements[1].text.strip()
-        
-        # 쉼표를 제거하고 실수(float)로 변환
-        close_price = float(close_price_raw.replace(",", ""))
-        
-        return date_str, close_price
-    except Exception as e:
-        print(f"[에러] {url} 파싱 실패: {e}")
-        return None, None
+def get_latest_trading_day() -> datetime:
+    """미국 기준: 오늘이 주말이면 가장 최근 금요일로 역추적"""
+    now = datetime.now()
+    while now.weekday() >= 5:   # 5=토, 6=일
+        now -= timedelta(days=1)
+    return now
 
 
-def _crawl_one(key, url):
-    driver = create_driver()
-    try:
-        print(f"  - {key} 데이터 가져오는 중...")
-        return key, *fetch_latest_row(driver, url)
-    finally:
-        driver.quit()
+def fetch_all() -> tuple[str | None, dict]:
+    """
+    yfinance로 전 종목 일괄 다운로드.
+    반환: (날짜 문자열, {키: 종가})
+    """
+    base_day = get_latest_trading_day()
+    start = (base_day - timedelta(days=7)).strftime("%Y-%m-%d")   # 넉넉히 7일
+    end   = (base_day + timedelta(days=1)).strftime("%Y-%m-%d")   # end는 exclusive
 
-def main():
-    print("[시작] 인베스팅닷컴 과거 데이터 수집을 시작합니다...")
+    symbols = list(TICKERS.values())
+    # 종목이 여럿이면 group_by='ticker'로 멀티컬럼 DataFrame 반환
+    raw = yf.download(symbols, start=start, end=end,
+                      auto_adjust=True, progress=False, group_by="ticker")
 
-    with ThreadPoolExecutor(max_workers=len(URLS)) as pool:
-        futures = [pool.submit(_crawl_one, key, url) for key, url in URLS.items()]
-        results = [f.result() for f in futures]
+    if raw.empty:
+        print("[에러] yfinance 다운로드 결과가 비어있습니다.")
+        return None, {}
 
-    scraped_data = {}
+    result = {}
     common_date = None
 
-    for key, date_str, price in results:
-        if date_str and price:
-            scraped_data[key] = price
-            if not common_date:
+    for name, symbol in TICKERS.items():
+        try:
+            # 멀티티커일 때 컬럼 구조: (ticker, OHLCV)
+            close_series = raw[symbol]["Close"].dropna()
+            if close_series.empty:
+                print(f"  [경고] {name}({symbol}): 데이터 없음")
+                return None, {}
+
+            last_date  = close_series.index[-1]
+            last_close = float(close_series.iloc[-1])
+
+            date_str = last_date.strftime("%Y년 %m월 %d일")
+            if common_date is None:
                 common_date = date_str
-        else:
-            print(f"[경고] {key} 데이터를 수집하지 못해 작업을 중단합니다.")
-            return
-    
-    if not common_date or len(scraped_data) < 4:
-        print("[종료] 완전한 데이터를 수집하지 못했습니다.")
-        return
+            elif common_date != date_str:
+                # 종목마다 최신 거래일이 다를 수 있으면 경고만 출력
+                print(f"  [주의] {name} 날짜({date_str})가 기준 날짜({common_date})와 다릅니다.")
 
-    print(f"\n[수집 성공] 기준 날짜: {common_date}")
-    for k, v in scraped_data.items():
-        print(f"  * {k}: {v:,}")
+            result[name] = last_close
+            print(f"  - {name}({symbol}): {date_str} 종가={last_close:,.2f}")
 
-    # ----------------------------------------------------
-    # 3. 엑셀 파일 처리 및 중복 체크 검증
-    # ----------------------------------------------------
-    # 엑셀 파일이 없으면 새로 생성 (헤더 포함)
+        except KeyError:
+            print(f"  [경고] {name}({symbol}): 컬럼 없음 — 상장폐지 또는 잘못된 티커")
+            return None, {}
+
+    return common_date, result
+
+
+def save_to_excel(common_date: str, data: dict):
+    os.makedirs(os.path.dirname(EXCEL_NAME), exist_ok=True)
+
+    # 파일 없으면 헤더 포함 새로 생성
     if not os.path.exists(EXCEL_NAME):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "시트1"
-        ws.append(["날짜", "SOX", "DRAM_ETF", "EWY", "KORU"])
+        ws.append(["날짜"] + KEYS)
+        ws.column_dimensions["A"].width = 18
         wb.save(EXCEL_NAME)
 
-    # 엑셀 로드
     wb = openpyxl.load_workbook(EXCEL_NAME)
     ws = wb.active
+    ws.column_dimensions["A"].width = 18   # 기존 파일도 보정
 
-    # 기존 데이터가 있을 경우 2행(기존의 가장 최신 행)의 날짜와 비교하여 중복 체크
+    # 같은 날짜 행이 있으면 삭제 후 덮어쓰기
     if ws.max_row >= 2:
-        existing_latest_date = ws.cell(row=2, column=1).value
-        if existing_latest_date == common_date:
-            print(f"\n[스킵] 최신 날짜 '{common_date}' 데이터가 이미 엑셀에 존재합니다. 크롤링을 스킵합니다.")
-            wb.close()
-            return
+        to_delete = [r for r in range(2, ws.max_row + 1)
+                     if ws.cell(row=r, column=1).value == common_date]
+        for r in reversed(to_delete):
+            ws.delete_rows(r)
 
-    # 💡 핵심: 2행에 빈 행을 삽입하여 기존 데이터를 아래로 밀어냅니다.
     ws.insert_rows(2)
-    
-    # 새 데이터 삽입 (2행)
     ws.cell(row=2, column=1, value=common_date)
-    ws.cell(row=2, column=2, value=scraped_data["SOX"])
-    ws.cell(row=2, column=3, value=scraped_data["DRAM_ETF"])
-    ws.cell(row=2, column=4, value=scraped_data["EWY"])
-    ws.cell(row=2, column=5, value=scraped_data["KORU"])
+    for col_idx, key in enumerate(KEYS, start=2):
+        ws.cell(row=2, column=col_idx, value=data[key])
 
-    # 엑셀 저장 및 닫기
     wb.save(EXCEL_NAME)
     wb.close()
-    print(f"\n[완료] '{common_date}' 행이 {EXCEL_NAME}의 2행에 성공적으로 추가되었습니다!")
+    print(f"\n[완료] '{common_date}' 행이 {EXCEL_NAME} 2행에 저장되었습니다.")
+
+
+def main():
+    print("[시작] 해외 ETF/지수 데이터 수집 (yfinance)\n")
+
+    common_date, data = fetch_all()
+
+    if not common_date or len(data) < len(TICKERS):
+        print("[종료] 완전한 데이터를 수집하지 못했습니다.")
+        return
+
+    print(f"\n[수집 성공] 기준 날짜: {common_date}")
+    save_to_excel(common_date, data)
+
 
 if __name__ == "__main__":
     main()

@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 CRAWLERS = [
     ("price_DB",  "stock_DB_collector",  "main"),
-    ("ETF_DB",    "ETF_DB_crawling",    "main"),
+    ("ETF_DB",    "ETF_DB_collector",    "main"),
     ("memory_DB", "memory_DB_crawling", "crawl_and_save"),
 ]
 
@@ -39,10 +39,15 @@ def run_all():
             elapsed = round(time.time() - start, 1)
             results[label] = f"완료 ({elapsed}s)"
             print(f"[{label}] 완료 ({elapsed}s)")
-        except ModuleNotFoundError:
+        except ModuleNotFoundError as e:
             elapsed = round(time.time() - start, 1)
-            results[label] = f"실패: {module_name}.py 파일을 찾을 수 없음"
-            print(f"[{label}] 실패: '{module_name}.py' 가 backend/ 폴더에 없습니다.")
+            missing = str(e).replace("No module named ", "").strip("'")
+            if missing == module_name:
+                results[label] = f"실패: {module_name}.py 파일을 찾을 수 없음"
+                print(f"[{label}] 실패: '{module_name}.py' 가 backend/ 폴더에 없습니다.")
+            else:
+                results[label] = f"실패: 의존성 없음 — {e}"
+                print(f"[{label}] 실패: 패키지가 설치되지 않았습니다 — {e}")
         except AttributeError:
             elapsed = round(time.time() - start, 1)
             results[label] = f"실패: {module_name}.{func_name}() 함수 없음"

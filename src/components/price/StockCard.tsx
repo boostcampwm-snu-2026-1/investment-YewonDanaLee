@@ -1,4 +1,5 @@
 'use client'
+import Image from 'next/image'
 import { useStockPolling } from '@/hooks/useStockPolling'
 import { formatPrice, formatRate, formatDiff, formatTrillion } from '@/lib/format'
 import type { ExchangeQuote } from '@/lib/naver'
@@ -27,10 +28,10 @@ function ExchangeBlock({ label, quote }: { label: string; quote: ExchangeQuote |
 
       {quote ? (
         <>
-          <div className="text-3xl font-bold tabular-nums mb-1" style={{ color: 'var(--text-1)' }}>
+          <div className="text-xl sm:text-2xl md:text-3xl font-bold tabular-nums mb-1" style={{ color: 'var(--text-1)' }}>
             ₩{formatPrice(quote.price)}
           </div>
-          <div className="text-sm tabular-nums font-medium" style={{ color: diffColor(quote.diffAmount) }}>
+          <div className="text-xs sm:text-sm tabular-nums font-medium" style={{ color: diffColor(quote.diffAmount) }}>
             {formatDiff(quote.diffAmount)}&nbsp;
             <span className="text-xs">({formatRate(quote.diffRate)})</span>
           </div>
@@ -51,13 +52,14 @@ export default function StockCard({ ticker, name }: { ticker: string; name: stri
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-3 mb-6">
-        <img
+        <Image
           src={`/${ticker}.${ticker === '005930' ? 'jpg' : 'png'}`}
           alt={name}
           width={36}
           height={36}
           className="rounded-full object-cover shrink-0"
           style={{ border: '1px solid var(--border)' }}
+          priority
         />
         <div className="flex items-baseline gap-2">
           <h2 className="text-lg font-semibold" style={{ color: 'var(--text-1)' }}>{name}</h2>

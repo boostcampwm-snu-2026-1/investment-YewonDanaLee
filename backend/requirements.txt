@@ -1,0 +1,11 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+selenium>=4.21.0
+xgboost
+lightgbm
+scikit-learn
+pandas
+openpyxl
+undetected-chromedriver
+setuptools
+pykrx

@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-up:      #E74C3C;
+  --color-down:    #3498DB;
+  --color-neutral: #888780;
+
+  --bg-page:   #F5F0E8;
+  --bg-card:   #FFFFFF;
+  --bg-muted:  #EDE8DF;
+  --border:    #DDD6CB;
+  --text-1:    #1C1917;
+  --text-2:    #78716C;
+  --accent:    #C2410C;
+  --accent-fg: #FFFFFF;
+}
+
+.dark {
+  --bg-page:   #0F0D0A;
+  --bg-card:   #1C1917;
+  --bg-muted:  #292524;
+  --border:    #3B3330;
+  --text-1:    #F5F0E8;
+  --text-2:    #A8A29E;
+  --accent:    #EA580C;
+  --accent-fg: #FFFFFF;
+}
+
+body {
+  background-color: var(--bg-page);
+  color: var(--text-1);
+}
+
+.card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
